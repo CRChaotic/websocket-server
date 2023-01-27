@@ -1,0 +1,6 @@
+# production
+/dist
+
+#etc
+/node_modules
+/private
