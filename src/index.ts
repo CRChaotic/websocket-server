@@ -3,8 +3,9 @@ import { readFileSync } from "fs";
 import { Writable } from "stream";
 import createFrame from "./utils/createFrame.js";
 import Opcode from "./utils/Opcode.js";
+import { State } from "./WebSocket.js";
 
-import { ReadyState } from "./WebSocket.js";
+
 import WebSocketServer from "./WebSocketServer.js";
 
 const wsServer = new WebSocketServer({
@@ -42,39 +43,49 @@ wsServer.on("connection", (ws) => {
         console.log("open websocket");
     })
 
-    ws.on("message", ({data, type}) => {
-        console.log("type:"+type);
-        // console.log("message:", data.toString("utf-8"));
-        if(data.toString() === "!close"){
-            ws.close(1000, "bye");
-            // return;
-        }
+    ws.on("message", async (data:Blob) => {
+        console.log("type:"+data.type);
+
+        // if(await data.text() === "!close"){
+        //     ws.close(1000, "bye");
+        //     // return;
+        // }
+
         //broadcasting
         wsServer.connections.forEach(async (websocket) => {
-            if(websocket.readyState !== ReadyState.OPEN){
-                return;
-            }
-            if(type === Opcode.TEXT){
-                try{
-                    await websocket.send(data.toString("utf-8"));
-                }catch(err){
-                    console.log(err);
+
+            try{
+                if(data.type === "text/plain"){
+                    try{
+                        const text = await data.text();
+                        if(websocket.state !== State.OPEN){
+                            return;
+                        }
+    
+                        await websocket.send(text);
+                    }catch(err){
+                        console.log(err);
+                    }
+                }else if(data.type === "application/octet-stream"){
+                    const buffer = await data.arrayBuffer();
+                    if(websocket.state !== State.OPEN){
+                        return;
+                    }
+                    await websocket.send(Buffer.from(buffer));
                 }
-            }else if(type === Opcode.BINARY){
-                try{
-                    await websocket.send(data);
-                }catch(err){
-                    console.log(err);
-                }
+            }catch(err){
+                console.log(err);
             }
-        })
+
+        });
     });
     ws.on("close", (code, reason) => {
         console.log("ws closed", "code:"+code , "reason:"+reason," remain connections:", wsServer.connections.size);
     });
     ws.on("error", (err) => {
-        console.log(err);
+         console.log("[ERROR] "+err.message);
     });
+
 });
 
 // console.log(createFrame({opCode:Opcode.TEXT, isMasked:true, payload:Buffer.from([0x00])}));

@@ -8,6 +8,7 @@ class WebSocketError extends Error{
         this.code = code;
         this.reason = reason;
     }
+
 }
 
 export default WebSocketError;

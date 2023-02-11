@@ -6,7 +6,14 @@ import { createServer, Server } from "https";
 import type { Authorizer } from "./Authorizer.js";
 import { createHash } from "crypto";
 import parseHeaders from "./utils/parseHeaders.js";
-import WebSocket, { WebSocket2 } from "./WebSocket.js";
+import type WebSocket from "./WebSocket.js";
+
+import Sender from "./Sender.js";
+import Opcode from "./utils/Opcode.js";
+import Receiver from "./Reciever.js";
+import type { Frame } from "./Frame.js";
+import { send } from "process";
+import Websocket from "./WebSocket.js";
 
 const MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const UPGRADE_PROTOCOL = "websocket";
@@ -27,10 +34,10 @@ declare interface WebSocketServer{
     on(event: "connection", listener: (websocket: WebSocket) => void): this;
     on(event: string, listener: Function): this;
 }
-
+//TO DO broadcasting
 class WebSocketServer extends EventEmitter{
 
-    readonly connections:Set<WebSocket2>;
+    readonly connections:Set<WebSocket>;
     readonly maxConnections:number|undefined;
     #server:Server;
     path:string;
@@ -100,44 +107,19 @@ class WebSocketServer extends EventEmitter{
             socket.write(headers, () => socket.destroy());
             return;
         }
-        
-        const webSocket = new WebSocket2(webSocketKey, webSocketVersion, socket);
-        this.emit("connection", webSocket); 
-
-        webSocket.once("open", () => {
-            this.connections.add(webSocket);
-        });
-        webSocket.once("close", () => {
-            this.connections.delete(webSocket);
-        });
-
-        // this.finishOpenHandshake(webSocketKey, socket, (err) => {
-        //     if(err){
-        //         return;
-        //     }
-        //     console.log("[INFO] completed websocket handshake");
-
-        //     const webSocket = new WebSocket2(socket);
-        //     this.connections.add(webSocket);
-        //     webSocket.once("close", () => this.connections.delete(webSocket));
     
-        //     this.emit("connection", webSocket); 
-        // });
-        
+        const webSocket = new Websocket(webSocketKey, webSocketVersion, socket);
+        webSocket.on("open", () => {
+            this.connections.add(webSocket);
+            console.log("[INFO] add new websocket, rest of all:", this.connections.size);
+        });
+        webSocket.on("close", () => {
+            this.connections.delete(webSocket);
+            console.log("[INFO] remove webosocket, rest of all:", this.connections.size);
+        });
+
+        this.emit("connection", webSocket); 
     }
-
-    // protected finishOpenHandshake(webSocketKey:string, socket:Socket, callback?:((err?: Error) => void)){
-
-    //     const webSocketAccept = createHash("sha1").update(webSocketKey + MAGIC_STRING).digest("base64");
-    //     const handshakeResponse = parseHeaders(101, "Switching Protocols", {
-    //         "connection": "upgrade",
-    //         "upgrade": UPGRADE_PROTOCOL,
-    //         "sec-websocket-accept":webSocketAccept
-    //     });
-    //     // console.log({handshakeResponse});
-    //     socket.write(handshakeResponse, callback);
-
-    // }
 
 }
 
