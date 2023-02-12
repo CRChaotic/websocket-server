@@ -1,8 +1,4 @@
-import { randomInt } from "crypto";
 import { readFileSync } from "fs";
-import { Writable } from "stream";
-import createFrame from "./utils/createFrame.js";
-import Opcode from "./utils/Opcode.js";
 import { State } from "./WebSocket.js";
 
 
@@ -12,6 +8,14 @@ const wsServer = new WebSocketServer({
     port:8081,
     key:readFileSync("./private/localhost.key"), 
     cert:readFileSync("./private/localhost.crt"),
+    handleSubprotocols(subprotocols) {
+        console.log("subprotocols:", subprotocols);
+        if(subprotocols.length === 0){
+            return "";
+        }else{
+            return "soap";
+        }
+    },
 });
 
 wsServer.on("listening", () => {
@@ -20,7 +24,6 @@ wsServer.on("listening", () => {
 
 wsServer.on("connection", (ws) => {
     console.log("new websocket connection, remain connections:", wsServer.connections.size);
-    // ws.setTimeout(10000);
 
     let pong = true;
     ws.on("pong", () =>{
@@ -28,6 +31,7 @@ wsServer.on("connection", (ws) => {
         console.log("recieved pong");
     });
 
+   
     // ws.on("timeout", () => {
     //     ws.ping();
     //     setTimeout(() => {
@@ -41,38 +45,24 @@ wsServer.on("connection", (ws) => {
 
     ws.on("open", () => {
         console.log("open websocket");
+        ws.ping();
     })
 
-    ws.on("message", async (data:Blob) => {
-        console.log("type:"+data.type);
+    ws.on("message", async (message, type) => {
 
-        // if(await data.text() === "!close"){
+        // if(message.toString("utf-8") === "!close"){
         //     ws.close(1000, "bye");
-        //     // return;
+        //     return;
         // }
 
         //broadcasting
         wsServer.connections.forEach(async (websocket) => {
+            if(websocket.state !== State.OPEN){
+                return;
+            }
 
             try{
-                if(data.type === "text/plain"){
-                    try{
-                        const text = await data.text();
-                        if(websocket.state !== State.OPEN){
-                            return;
-                        }
-    
-                        await websocket.send(text);
-                    }catch(err){
-                        console.log(err);
-                    }
-                }else if(data.type === "application/octet-stream"){
-                    const buffer = await data.arrayBuffer();
-                    if(websocket.state !== State.OPEN){
-                        return;
-                    }
-                    await websocket.send(Buffer.from(buffer));
-                }
+                await websocket.send(message, type);
             }catch(err){
                 console.log(err);
             }
@@ -83,9 +73,9 @@ wsServer.on("connection", (ws) => {
         console.log("ws closed", "code:"+code , "reason:"+reason," remain connections:", wsServer.connections.size);
     });
     ws.on("error", (err) => {
-         console.log("[ERROR] "+err.message);
+         console.log("[ERROR] "+err);
     });
 
 });
 
-// console.log(createFrame({opCode:Opcode.TEXT, isMasked:true, payload:Buffer.from([0x00])}));
+

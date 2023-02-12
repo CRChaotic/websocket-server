@@ -1,5 +1,5 @@
 import { randomInt } from "crypto";
-import {  Transform, TransformCallback } from "stream";
+import { Transform, TransformCallback } from "stream";
 import type { Frame } from "./Frame.js";
 import isControlFrame from "./utils/isControlFrame.js";
 
@@ -50,56 +50,59 @@ class Sender extends Transform{
             headerSize += 4;
         }
 
-        const frame:Buffer = Buffer.allocUnsafe(headerSize + payloadSize);
-        //first byte need to be equal to clear up origin data because it is allocUnsafe
-        if(isFinished){
-            frame[offset] = 0b10000000;
-        }
+        let start = performance.now();
+        const header:Buffer = Buffer.alloc(headerSize);
 
+        if(isFinished){
+            header[offset] |= 0b10000000;
+        }
         if(rsv[0]){
-            frame[offset] |= 0b01000000;
+            header[offset] |= 0b01000000;
         }
         if(rsv[1]){
-            frame[offset] |= 0b00100000;
+            header[offset] |= 0b00100000;
         }
         if(rsv[2]){
-            frame[offset] |= 0b00010000;
+            header[offset] |= 0b00010000;
         }
-        frame[offset] |= opcode;
+        header[offset] |= opcode;
         offset += 1;
-        //same as first byte
+   
         if(isMasked){
-            frame[offset] = 0b10000000;
+            header[offset] |= 0b10000000;
         }
-        frame[offset] |= payloadLength;
+        header[offset] |= payloadLength;
         offset += 1;
         //rest of bytes would be all covered with new data
         if(payloadLength === 127){
-            frame.writeBigUint64BE(BigInt(payloadSize), offset);
+            header.writeBigUint64BE(BigInt(payloadSize), offset);
             offset += 8;
         }else if(payloadLength === 126){
-            frame.writeUInt16BE(payloadSize, offset);
+            header.writeUInt16BE(payloadSize, offset);
             offset += 2;
         }
 
         const maskingKey:Buffer = Buffer.from([randomInt(255), randomInt(255), randomInt(255), randomInt(255)]);
         if(isMasked){
             for(let key of maskingKey){
-                frame[offset] = key;
+                header[offset] = key;
                 offset++;
             }
         }
 
-        payload?.forEach((value:number, index:number) => {
+        if(payload){
             if(isMasked){
-                frame[offset + index] = maskingKey[index % 4] ^ value;
-            }else{
-                frame[offset + index] = value;
+                payload.forEach((value:number, index:number) => {
+                    payload[index] = maskingKey[index % 4] ^ value;
+                });
             }
-        });
-        
-        this.push(frame)
+            this.push(Buffer.concat([header, payload]));
+        }else{
+            this.push(header);
+        }
+
         callback();
+        console.log((performance.now() - start)+"ms");
     }
 
 }

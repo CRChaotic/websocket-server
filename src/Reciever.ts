@@ -1,5 +1,5 @@
 import { constants } from "buffer";
-import { Transform, TransformCallback } from "stream";
+import { Readable, Transform, TransformCallback } from "stream";
 import type { Frame, Header } from "./Frame.js";
 import isControlFrame from "./utils/isControlFrame.js";
 import parseFinAndOpcode2 from "./utils/parseFinAndOpcode.js";
