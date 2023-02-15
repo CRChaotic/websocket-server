@@ -1,10 +1,12 @@
 import { constants } from "buffer";
 import { Readable, Transform, TransformCallback } from "stream";
 import type { Frame, Header } from "./Frame.js";
+import { Code, isReservedCode } from "./utils/Code.js";
 import isControlFrame from "./utils/isControlFrame.js";
+import Opcode from "./utils/Opcode.js";
 import parseFinAndOpcode2 from "./utils/parseFinAndOpcode.js";
 import parseMaskAndPayloadLength from "./utils/parseMaskAnyPayloadLength.js";
-import { StatusCode } from "./utils/StatusCode.js";
+
 import WebSocketError from "./WebSocketError.js";
 
 enum FramePart {
@@ -47,7 +49,6 @@ class Receiver extends Transform{
 
     constructor(options:ReceiverOptions = {}){
         super({readableObjectMode:true});
-
         this.#mustBeMasked = options.mustBeMasked??true;
     }
 
@@ -67,7 +68,7 @@ class Receiver extends Transform{
                     this.#opcode = opcode;
                     // console.log("isFinished:", this.#isFinished);
                     if(isControlFrame(this.#opcode) && !this.#isFinished){
-                        this.destroy(new WebSocketError(StatusCode.PROTOCOL_ERROR, "Control frame must not be fragmented"));
+                        callback(new WebSocketError(Code.PROTOCOL_ERROR, "Control frame must not be fragmented"));
                         return;
                     }
 
@@ -80,14 +81,14 @@ class Receiver extends Transform{
                     this.#extendedPayloadLengthSize = extendedPayloadLengthSize;
 
                     if(isControlFrame(this.#opcode) && this.#payloadLength > MAX_CONTROL_FRAME_PAYLOAD_SIZE){
-                        this.destroy(new WebSocketError(
-                            StatusCode.PROTOCOL_ERROR,
-                            "Exceeded max control frame payload size "+MAX_CONTROL_FRAME_PAYLOAD_SIZE
+                        callback(new WebSocketError(
+                            Code.PROTOCOL_ERROR,
+                            "Control frame payload size exceeds "+MAX_CONTROL_FRAME_PAYLOAD_SIZE
                         ));
                         return;
                     }
                     if(this.#mustBeMasked && !this.#isMasked){
-                        this.destroy(new Error("Frame must be masked"));
+                        callback(new Error("Frame must be masked"));
                         return;
                     }
 
@@ -130,7 +131,7 @@ class Receiver extends Transform{
                             this.#payloadLength = this.#extendedPayloadLength.readUInt16BE(0);
                         }else if(this.#extendedPayloadLengthSize === 8){
                             if(this.#extendedPayloadLength.readBigUInt64BE(0) > constants.MAX_LENGTH){
-                                this.destroy(new WebSocketError(StatusCode.MESSAGE_TOO_LARGE, "Exceeded max payload size"));
+                                callback(new WebSocketError(Code.MESSAGE_TOO_LARGE, "Frame payload size exceeds max limit size"));
                                 return;
                             }
 
@@ -198,6 +199,20 @@ class Receiver extends Transform{
                     }
 
                     if(this.#bufferedSize === this.#payloadLength){
+
+                        if(this.#opcode === Opcode.CLOSE && this.#payload.byteLength > 0){
+                            if(this.#payload.byteLength === 1){
+                                callback(new WebSocketError(Code.PROTOCOL_ERROR, "Close frame payload data is wrong"));
+                                return;
+                            }
+                            
+                            const code = this.#payload.readUIntBE(0, 2);
+                            if(isReservedCode(code)){
+                                callback(new WebSocketError(Code.PROTOCOL_ERROR, "Close frame is containing a reserved code"));
+                                return;
+                            }
+                        }
+
                         this.#bufferedSize = 0;
                         this.#framePart = FramePart.FIN_AND_OPCODE;
                         this.push({

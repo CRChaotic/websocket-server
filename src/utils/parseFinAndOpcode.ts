@@ -1,6 +1,6 @@
 import Opcode from "./Opcode.js";
 
-function parseFinAndOpCode(byte:number){
+function parseFinAndOpcode(byte:number){
 
     const isFinished = (byte & 0b10000000) === 128;
     const rsv1 = byte & 0b01000000;

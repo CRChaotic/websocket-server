@@ -9,12 +9,7 @@ const wsServer = new WebSocketServer({
     key:readFileSync("./private/localhost.key"), 
     cert:readFileSync("./private/localhost.crt"),
     handleSubprotocols(subprotocols) {
-        console.log("subprotocols:", subprotocols);
-        if(subprotocols.length === 0){
-            return "";
-        }else{
-            return "soap";
-        }
+        return "";
     },
 });
 
@@ -25,48 +20,42 @@ wsServer.on("listening", () => {
 wsServer.on("connection", (ws) => {
     console.log("new websocket connection, remain connections:", wsServer.connections.size);
 
-    let pong = true;
-    ws.on("pong", () =>{
-        pong = true;
-        console.log("recieved pong");
+    ws.on("pong", (payload) =>{
+        console.log("recieved pong",payload?.toString());
     });
-
-   
-    // ws.on("timeout", () => {
-    //     ws.ping();
-    //     setTimeout(() => {
-    //         if(!pong){
-    //             ws.close();
-    //         }else{
-    //             pong = false;
-    //         }
-    //     }, 5000);
-    // });
 
     ws.on("open", () => {
         console.log("open websocket");
-        ws.ping();
+        ws.ping()
+        .then(() =>  console.log("pinged"))
+        .catch(console.error);
     })
 
-    ws.on("message", async (message, type) => {
+    ws.on("message",(message, type) => {
 
-        // if(message.toString("utf-8") === "!close"){
-        //     ws.close(1000, "bye");
-        //     return;
-        // }
+        if(message.toString("utf-8") === "!close"){
+            ws.close(1000, "bye")
+            .catch(err => console.error("close error:", err));
+            return;
+        }
 
         //broadcasting
-        wsServer.connections.forEach(async (websocket) => {
+        let i = 0;
+        let start = performance.now();
+        wsServer.connections.forEach((websocket) => {
             if(websocket.state !== State.OPEN){
                 return;
             }
 
-            try{
-                await websocket.send(message, type);
-            }catch(err){
-                console.log(err);
-            }
-
+            websocket.send(message, type)
+            .then(() => {
+                i++;
+                if(i === wsServer.connections.size){
+                    // console.log("size:",message.byteLength,"broadcasting time:", performance.now()-start);
+                    // console.log("memo usage:", process.memoryUsage().heapUsed/1024**2+"MB");
+                }
+            }).catch(console.error);
+         
         });
     });
     ws.on("close", (code, reason) => {
@@ -77,5 +66,3 @@ wsServer.on("connection", (ws) => {
     });
 
 });
-
-
