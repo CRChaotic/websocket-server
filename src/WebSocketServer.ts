@@ -16,6 +16,7 @@ export type WebSocketServerOptions = {
     maxConnections?:number;
     authorizer?:Authorizer;
     maxMessageSize?:number;
+    maxFrameSize?:number;
     handleSubprotocols?:(subprotocols:string[]) => string;
 };
 
@@ -35,7 +36,18 @@ class WebSocketServer extends EventEmitter{
     authorizer:WebSocketServerOptions["authorizer"];
     handleSubprotocols:(subprotocols:string[]) => string;
 
-    constructor({port, key, cert, allowOrigin, path = "/", maxConnections, maxMessageSize = 1024**2*100, authorizer, handleSubprotocols}:WebSocketServerOptions){
+    constructor({
+        port, 
+        key, 
+        cert, 
+        allowOrigin, 
+        path = "/", 
+        maxConnections,
+        maxMessageSize = 1024**2*10,
+        maxFrameSize = 1024**2, 
+        authorizer, 
+        handleSubprotocols
+    }:WebSocketServerOptions){
         super();
         this.connections = new Set();
         this.path = path;
@@ -96,7 +108,7 @@ class WebSocketServer extends EventEmitter{
                 return;
             }
             const subprotocol = this.handleSubprotocols(webSocketSubprotocols);
-            const webSocket = new WebSocket(webSocketKey, socket, {maxMessageSize, subprotocol});
+            const webSocket = new WebSocket(webSocketKey, socket, {maxMessageSize, maxFrameSize, subprotocol});
             webSocket.on("open", () => {
                 this.connections.add(webSocket);
                 console.log("[INFO] add new websocket, rest of all:", this.connections.size);

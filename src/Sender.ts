@@ -1,12 +1,11 @@
 import { randomInt } from "crypto";
 import { Transform, TransformCallback } from "stream";
 import type { Frame } from "./Frame.js";
-import isControlFrame from "./utils/isControlFrame.js";
 
 declare interface Sender extends Transform{
-    write(frame:Omit<Frame, "payloadLength">, callback?:(err?:Error|null) => void):boolean;
-    write(frame:Omit<Frame, "payloadLength">, encoding?:string, callback?:(err?:Error|null) => void):boolean;
-    end(frame:Omit<Frame, "payloadLength">, callback?:() => void): this;
+    write(frame:Frame, callback?:(err?:Error|null) => void):boolean;
+    write(frame:Frame, encoding?:string, callback?:(err?:Error|null) => void):boolean;
+    end(frame:Frame, callback?:() => void): this;
     end(callback?:() => void): this;
     on(event: "data", listener:(frame:Frame) => void): this;
     on(event: "error", listener:(error:Error) => void): this;
@@ -14,33 +13,19 @@ declare interface Sender extends Transform{
     on(event: string, listener: Function): this;
 }
 
-const MAX_CONTROL_FRAME_PAYLOAD_SIZE = 125;
-
 class Sender extends Transform{
 
     constructor(){
-        super({writableObjectMode:true, allowHalfOpen:false});
+        super({writableObjectMode:true});
     }
 
     override _transform(
-        {isFinished, rsv, opcode, isMasked, payload}: Omit<Frame, "payloadLength">, 
+        {isFinished, rsv, opcode, isMasked, payload}: Frame, 
         encoding: BufferEncoding, 
         callback: TransformCallback
     ): void {
-        if(isControlFrame(opcode)){
-            if(!isFinished){
-                callback(new Error("Control frame must not be fragmented"));
-                return;
-            }else if(payload.byteLength > MAX_CONTROL_FRAME_PAYLOAD_SIZE){
-                callback(new Error("Control frame payload size must not exceed "+MAX_CONTROL_FRAME_PAYLOAD_SIZE));
-                return;
-            }
-        }
 
         let payloadSize = payload.byteLength;
-        // if(payload){
-        //     payloadSize = payload.byteLength;
-        // }
         let payloadLength = 0;
         let headerSize = 2;
         let offset = 0;
@@ -90,8 +75,9 @@ class Sender extends Transform{
             offset += 2;
         }
 
-        const maskingKey:Buffer = Buffer.from([randomInt(255), randomInt(255), randomInt(255), randomInt(255)]);
         if(isMasked){
+            const maskingKey = [randomInt(255), randomInt(255), randomInt(255), randomInt(255)];
+
             for(let key of maskingKey){
                 header[offset] = key;
                 offset++;
@@ -103,7 +89,6 @@ class Sender extends Transform{
 
         this.push(header);
         this.push(payload);
-        // this.push(Buffer.concat([header, payload]));
         callback();
     }
 

@@ -8,6 +8,7 @@ const wsServer = new WebSocketServer({
     port:8081,
     key:readFileSync("./private/localhost.key"), 
     cert:readFileSync("./private/localhost.crt"),
+    maxMessageSize:1024**2*100,
     handleSubprotocols(subprotocols) {
         return "";
     },
@@ -26,16 +27,13 @@ wsServer.on("connection", (ws) => {
 
     ws.on("open", () => {
         console.log("open websocket");
-        ws.ping()
-        .then(() =>  console.log("pinged"))
-        .catch(console.error);
+        ws.ping();
     })
 
     ws.on("message",(message, type) => {
 
         if(message.toString("utf-8") === "!close"){
-            ws.close(1000, "bye")
-            .catch(err => console.error("close error:", err));
+            ws.close(1000, "bye");
             return;
         }
 
@@ -51,8 +49,7 @@ wsServer.on("connection", (ws) => {
             .then(() => {
                 i++;
                 if(i === wsServer.connections.size){
-                    // console.log("size:",message.byteLength,"broadcasting time:", performance.now()-start);
-                    // console.log("memo usage:", process.memoryUsage().heapUsed/1024**2+"MB");
+                    console.log("size:",message.byteLength/1024**2, "MB", " broadcasting time:", performance.now()-start);
                 }
             }).catch(console.error);
          
@@ -62,7 +59,7 @@ wsServer.on("connection", (ws) => {
         console.log("ws closed", "code:"+code , "reason:"+reason," remain connections:", wsServer.connections.size);
     });
     ws.on("error", (err) => {
-         console.log("[ERROR] "+err);
+         console.log("[ERROR] ",err);
     });
 
 });

@@ -1,91 +1,22 @@
-import { randomInt } from "crypto";
-import type Opcode from "./Opcode.js";
-
+import type { Frame } from "../Frame.js";
 
 type CreateFrameOptions = {
     isFinished?:boolean;
-    rsv1?:boolean;
-    rsv2?:boolean;
-    rsv3?:boolean;
-    opcode:Opcode;
+    rsv?:[boolean, boolean, boolean];
+    opcode:number;
     isMasked?:boolean;
-    payloadData?:Buffer; 
+    payload?:Buffer; 
 }
 
-function createFrame({isFinished = true, rsv1, rsv2, rsv3, opcode, isMasked = false, payloadData}:CreateFrameOptions):Buffer{
-
-    let payloadSize = 0;
-    if(payloadData){
-        payloadSize = payloadData.byteLength;
-    }
-    let payloadLength = 0;
-    let headerSize = 2;
-    let offset = 0;
-
-    if(payloadSize > 65535){
-        payloadLength = 127;
-        headerSize += 8;
-    }else if(payloadSize > 125){
-        payloadLength = 126;
-        headerSize += 2;
-    }else{
-        payloadLength = payloadSize;
-    }
-
-    if(isMasked){
-        headerSize += 4;
-    }
-
-    const frame:Buffer = Buffer.alloc(headerSize + payloadSize);
-
-    if(isFinished){
-        frame[offset] |= 0b10000000;
-    }
-    if(rsv1){
-        frame[offset] |= 0b01000000;
-    }
-    if(rsv2){
-        frame[offset] |= 0b00100000;
-    }
-    if(rsv3){
-        frame[offset] |= 0b00010000;
-    }
-    frame[offset] |= opcode;
-    offset += 1;
-
-    if(isMasked){
-        frame[offset] |= 0b10000000;
-    }
-    frame[offset] |= payloadLength;
-    offset += 1;
-
-    if(payloadLength === 127){
-        frame.writeBigUint64BE(BigInt(payloadSize), offset);
-        offset += 8;
-    }else if(payloadLength === 126){
-        frame.writeUInt16BE(payloadSize, offset);
-        offset += 2;
-    }
-
-    const maskingKey:number[] = [];
-    if(isMasked){
-        let aKey;
-        while(maskingKey.length < 4){
-            aKey = randomInt(255);
-            maskingKey.push(aKey);
-            frame[offset] = aKey;
-            offset++;
-        }
-    }
-
-    payloadData?.forEach((value:number, index:number) => {
-        if(maskingKey.length === 4){
-            frame[offset + index] = maskingKey[index % 4] ^ value;
-        }else{
-            frame[offset + index] = value;
-        }
-    });
-
+function createFrame({isFinished = true, rsv = [false, false, false], opcode, isMasked = false, payload = Buffer.alloc(0)}:CreateFrameOptions):Frame{
+    const frame:Frame = {
+        isFinished,
+        rsv,
+        opcode,
+        isMasked,
+        payloadLength:payload.byteLength,
+        payload
+    };
     return frame;
 }
 

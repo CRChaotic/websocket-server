@@ -17,9 +17,11 @@ enum FramePart {
     PAYLOAD = 4,
 }
 const MAX_CONTROL_FRAME_PAYLOAD_SIZE = 125;
+const DEFAULT_MAX_FRAME_SIZE = 1024**2;
 
 type ReceiverOptions = {
     mustBeMasked?:boolean;
+    maxFrameSize?:number;
 }
 
 declare interface Receiver{
@@ -37,6 +39,7 @@ class Receiver extends Transform{
     #framePart = FramePart.FIN_AND_OPCODE;
     #extendedPayloadLength = Buffer.alloc(8);
     #bufferedSize = 0;
+    #maxFrameSize:number;
 
     #isFinished = true;
     #rsv:[boolean, boolean, boolean] = [false, false, false];
@@ -47,9 +50,14 @@ class Receiver extends Transform{
     #payloadLength = 0;
     #payload:Buffer|null = null;
 
-    constructor(options:ReceiverOptions = {}){
+    constructor({mustBeMasked = true, maxFrameSize = DEFAULT_MAX_FRAME_SIZE}:ReceiverOptions = {}){
         super({readableObjectMode:true});
-        this.#mustBeMasked = options.mustBeMasked??true;
+        if(maxFrameSize < MAX_CONTROL_FRAME_PAYLOAD_SIZE || maxFrameSize > constants.MAX_LENGTH){
+            throw new Error(`Max frame size must be between ${MAX_CONTROL_FRAME_PAYLOAD_SIZE} and ${constants.MAX_LENGTH} bytes`);
+        }
+        this.#mustBeMasked = mustBeMasked;
+        //Max frame size is 1MB
+        this.#maxFrameSize = maxFrameSize;
     }
 
     override _transform(chunk: Buffer, encoding: BufferEncoding, callback: TransformCallback): void {
@@ -106,13 +114,6 @@ class Receiver extends Transform{
                     }
 
                     this.#framePart = FramePart.PAYLOAD;
-                    this.emit("header", {
-                        isFinished:this.#isFinished,
-                        rsv:this.#rsv,
-                        opcode:this.#opcode,
-                        isMasked:this.#isMasked,
-                        payloadLength:this.#payloadLength
-                    });
                     if(this.#payloadLength === 0){
                         continue;
                     }
@@ -130,8 +131,8 @@ class Receiver extends Transform{
                         if(this.#extendedPayloadLengthSize === 2){
                             this.#payloadLength = this.#extendedPayloadLength.readUInt16BE(0);
                         }else if(this.#extendedPayloadLengthSize === 8){
-                            if(this.#extendedPayloadLength.readBigUInt64BE(0) > constants.MAX_LENGTH){
-                                callback(new WebSocketError(Code.MESSAGE_TOO_LARGE, "Frame payload size exceeds max limit size"));
+                            if(this.#extendedPayloadLength.readBigUInt64BE(0) > this.#maxFrameSize){
+                                callback(new WebSocketError(Code.TOO_LARGE, "Frame payload exceeds max limit size"));
                                 return;
                             }
 
@@ -144,13 +145,6 @@ class Receiver extends Transform{
                         }
 
                         this.#framePart = FramePart.PAYLOAD;
-                        this.emit("header", {
-                            isFinished:this.#isFinished,
-                            rsv:this.#rsv,
-                            opcode:this.#opcode,
-                            isMasked:this.#isMasked,
-                            payloadLength:this.#payloadLength
-                        });
                         if(this.#payloadLength === 0){
                             continue;
                         }
@@ -167,14 +161,6 @@ class Receiver extends Transform{
                         this.#bufferedSize = 0;
 
                         // console.log("maskingKey:", this.#maskingKey);
-                        this.emit("header", {
-                            isFinished:this.#isFinished,
-                            rsv:this.#rsv,
-                            opcode:this.#opcode,
-                            isMasked:this.#isMasked,
-                            payloadLength:this.#payloadLength
-                        });
-
                         this.#framePart = FramePart.PAYLOAD;
                         if(this.#payloadLength === 0){
                             continue;
@@ -220,7 +206,6 @@ class Receiver extends Transform{
                             rsv:this.#rsv,
                             opcode:this.#opcode,
                             isMasked:this.#isMasked,
-                            payloadLength:this.#payloadLength,
                             payload:this.#payload
                         });
                         this.#payload = null;

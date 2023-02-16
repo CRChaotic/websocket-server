@@ -1,24 +1,22 @@
 import EventEmitter from "events";
-import type { Socket } from "net";
 import Opcode from "./utils/Opcode.js";
 import { createHash } from "crypto";
 import parseHeaders from "./utils/parseHeaders.js";
 import Sender from "./Sender.js";
 import Receiver from "./Reciever.js";
-import type { Frame, Header } from "./Frame.js";
+import type { Frame } from "./Frame.js";
 import { isReservedCode, Code } from "./utils/Code.js";
 import { constants } from "buffer";
 import WebSocketError from "./WebSocketError.js";
 import type { Duplex } from "stream";
+import createFrame from "./utils/createFrame.js";
 
-const DEFAULT_MAX_MESSAGE_SIZE = 1024**2*100;
+const DEFAULT_MAX_MESSAGE_SIZE = 1024**2*10;
 const MAX_CONTROL_FRAME_PAYLOAD_SIZE = 125;
-const MASKING_KEY_SIZE = 4;
 const CLOSE_FRAME_CODE_SIZE = 2;
 
 const MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const VERSION = "13";
-const ZERO_LENGTH_BUFFER = Buffer.alloc(0);
 
 export enum State {
     CONNECTING = 0,
@@ -34,15 +32,9 @@ export type WebSocketMessage = {
 
 export type WebSocketOptions = {
     maxMessageSize?:number;
+    maxFrameSize?:number;
     closeTimeout?:number;
     subprotocol?:string;
-}
-
-type SendFrameOptions = {
-    isFinished?:boolean; 
-    rsv?:[boolean, boolean, boolean]; 
-    isMasked?:boolean;
-    payload?:Buffer;
 }
 
 declare interface WebSocket {
@@ -73,6 +65,8 @@ const createCloseFramePayload = (code:number, reason:string = "") => {
     return payload;
 };
 
+let start = 0;
+
 class WebSocket extends EventEmitter {
 
     #state:State;
@@ -93,9 +87,10 @@ class WebSocket extends EventEmitter {
     constructor(key:string, socket:Duplex, {
         subprotocol = "",
         maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE,
+        maxFrameSize = 1024**2,
         closeTimeout = 1000,
     }:WebSocketOptions = {}){
-        if(maxMessageSize < MAX_CONTROL_FRAME_PAYLOAD_SIZE || MASKING_KEY_SIZE > constants.MAX_LENGTH){
+        if(maxMessageSize < MAX_CONTROL_FRAME_PAYLOAD_SIZE || MAX_CONTROL_FRAME_PAYLOAD_SIZE > constants.MAX_LENGTH){
             throw Error(`max mesage size must be between ${MAX_CONTROL_FRAME_PAYLOAD_SIZE} and ${constants.MAX_LENGTH}`);
         }
 
@@ -112,13 +107,12 @@ class WebSocket extends EventEmitter {
         this.#bufferedPayloadSize = 0;
 
         this.#sender = new Sender();
-        this.#receiver = new Receiver();
+        this.#receiver = new Receiver({maxFrameSize});
         this.#sender.pipe(this.#socket);
         this.#socket.pipe(this.#receiver);
 
         this.#sender.on("error", (err) => this.emit("error", err));
-        this.#sender.on("close", () => this.#socket.end());
-        this.#socket.on("error", () => this.emit("error", new Error("Underlying socket error")));
+        this.#socket.on("error", (err) => this.emit("error", err));
         this.#socket.on("close", () => {
             console.log("socket closed");
             //has not finished closing handshake yet
@@ -131,16 +125,15 @@ class WebSocket extends EventEmitter {
             this.emit("close", this.#code, this.#reason);
         });
 
-        this.#receiver.on("close", () => console.log("receiver closed"));
-        this.#receiver.on("header", this.#receiveHeader.bind(this));
         this.#receiver.on("data", this.#receiveFrame.bind(this));
         this.#receiver.on("error", (webSocketError) => {
             if(!this.#sender.writable){
                 return;
             }
             //send last close frame
-            this.close(webSocketError.code, webSocketError.reason)
-            .catch(console.error);
+            const payload = createCloseFramePayload(webSocketError.code, webSocketError.reason);
+            const frame = createFrame({opcode:Opcode.CLOSE, payload});
+            this.#sender.end(frame);
         });
 
         this.#finishOpeningHandshake(key);
@@ -181,34 +174,17 @@ class WebSocket extends EventEmitter {
 
     #finishClosingHandshake(code?:number, reason = "", options:{rsv?:[boolean, boolean, boolean], isMasked?:boolean}={}){
 
-        let payload = ZERO_LENGTH_BUFFER;
+        let frame:Frame;
         if(code != null){
-            payload = createCloseFramePayload(code, reason);
+            const payload = createCloseFramePayload(code, reason);
+            frame = createFrame({...options, opcode:Opcode.CLOSE, payload});
+
+        }else{
+            frame = createFrame({...options, opcode:Opcode.CLOSE});
         }
 
-        this.#sender.end({
-                isFinished:true, 
-                rsv:options?.rsv??[false, false, false],
-                opcode:Opcode.CLOSE,
-                isMasked:options?.isMasked??false,
-                payload
-        }, () => this.#state = State.CLOSED);
-    }
-
-    #receiveHeader(header:Header){
-
-         this.#bufferedPayloadSize += header.payloadLength;
-
-         if(this.#bufferedPayloadSize > this.#maxMessageSize){
-            this.#receiver.destroy(new WebSocketError(
-                Code.MESSAGE_TOO_LARGE, 
-                `Exceeds max message size`
-            ));
-         }
-         if(header.isFinished){
-            this.#bufferedPayloadSize = 0;
-         }
-
+        this.#sender.end(frame);
+        this.#state = State.CLOSED;
     }
 
     #receiveFrame(frame:Frame){
@@ -243,29 +219,30 @@ class WebSocket extends EventEmitter {
             case Opcode.TEXT:
             case Opcode.BINARY:
                 this.#messageType = frame.opcode;
-                this.#framePayloads = [frame.payload];
-
-                if(frame.isFinished){
-                    this.emit("message", frame.payload, this.#messageType);
-                    this.#messageType = -1;
-                    this.#framePayloads = [];
-                }
-
-                break;
             case Opcode.CONTINUATION:
                 //no message type continuation frame is disposed
                 if(this.#messageType === -1){
                     return;
                 }
 
+                this.#bufferedPayloadSize += frame.payload.byteLength;
+                // console.log("message size:", this.#bufferedPayloadSize/1024**2+"MB");
+                if(this.#bufferedPayloadSize > this.#maxMessageSize){
+                    this.#receiver.destroy(new WebSocketError(Code.TOO_LARGE, "Exceeded max message size"));
+                    return;
+                }
+                start = performance.now();
                 this.#framePayloads.push(frame.payload);
                 if(frame.isFinished){
                     this.emit("message", Buffer.concat(this.#framePayloads), this.#messageType);
+                    console.log("consume frames time:", (performance.now() - start), "ms");
                     this.#framePayloads = [];
                     this.#messageType = -1;
+                    this.#bufferedPayloadSize = 0;
                 }
                 break;
             default:
+                this.#receiver.destroy(new WebSocketError(Code.UNSUPPORTED_DATA, "Unknown frame"));
                 //ignore unknown frame
         }
 
@@ -274,90 +251,75 @@ class WebSocket extends EventEmitter {
         setImmediate(() =>  this.#socket.resume());
     }
 
-    #sendFrame(
-        opcode:number,
-        {
-            isFinished = true, 
-            rsv = [false, false, false],
-            isMasked = false,
-            payload = ZERO_LENGTH_BUFFER,
-        }:SendFrameOptions = {}
-    ){
+    send(message:Buffer, type:Opcode.TEXT|Opcode.BINARY, options?:{isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
         return new Promise<void>((resolve, reject) => {
-            if(this.#sender.closed){
-                return reject(new Error("Cannot send frame when sender has closed"));
+            if(this.#state !== State.OPEN){
+                throw new Error("Cannot send message when state is not OPEN");
             }
     
-            const frame = {
-                isFinished, 
-                rsv,
-                opcode,
-                isMasked,
-                payload,
-            };
-
-            if(opcode === Opcode.CLOSE){
-                this.#sender.end(frame, resolve);
-            }else{
-                this.#sender.write(frame, (err) => err ? reject(err):resolve());
-            }
+            const frame = createFrame({...options, opcode:type, payload:message});
+            this.#sender.write(frame, (err) => err ? reject(err):resolve());
         });
     }
 
-    async send(message:Buffer, type:Opcode.TEXT|Opcode.BINARY, options?:{isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
-        if(this.#state !== State.OPEN){
-            throw new Error("Cannot send message when state is not OPEN");
-        }
-
-        await this.#sendFrame(type, {...options, payload:message});
-    }
-
-    async close(code:number, reason = "", options?:{isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
-        if(this.#state !== State.OPEN){
-            throw new Error("Cannot send close frame when state is not OPEN");
-        }
-
-        if(code != null){
-            const maxReasonLength = MAX_CONTROL_FRAME_PAYLOAD_SIZE - CLOSE_FRAME_CODE_SIZE;
-            if(Buffer.byteLength(reason) > maxReasonLength){
-                throw new Error("Length of reason must not be greater than " + maxReasonLength +"bytes");
+    close(code:number, reason = "", options?:{isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
+        return new Promise<void>((resolve, reject) => {
+            if(this.#state !== State.OPEN){
+                return reject(Error("Cannot send close frame when state is not OPEN"));
             }
-            if(isReservedCode(code)){
-                throw new Error(`Code ${code} is a reserved code`);
-            }
-
-            const payload = createCloseFramePayload(code, reason);
-            await this.#sendFrame(Opcode.CLOSE, {...options, payload});
-        }else{
-            await this.#sendFrame(Opcode.CLOSE, options);
-        }
-        //wait for response close frame
-        this.#closeTimer = setTimeout(() => {
-            if(!this.#socket.writable){
-                return;
-            }
-            //time out and force close socket
-            console.log("coerce to close socket");
-            this.#socket.end();
-        }, this.#closeTimeout);
-
-        this.#state = State.CLOSING;
-    }
-
-    async ping(options?:{payload?:Buffer, isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
-        if(this.#state !== State.OPEN){
-            throw new Error("state is not OPEN cannot send pong frame");
-        }
     
-        await this.#sendFrame(Opcode.PING, options);
+            let frame:Frame;
+
+            if(code != null){
+                const maxReasonLength = MAX_CONTROL_FRAME_PAYLOAD_SIZE - CLOSE_FRAME_CODE_SIZE;
+                if(Buffer.byteLength(reason) > maxReasonLength){
+                    return reject(Error("Length of reason must not be greater than " + maxReasonLength +"bytes"));
+                }
+                if(isReservedCode(code)){
+                    return reject(new Error(`Code ${code} is a reserved code`));
+                }
+    
+                const payload = createCloseFramePayload(code, reason);
+                frame = createFrame({...options, opcode:Opcode.CLOSE, payload});
+            }else{
+                frame = createFrame({...options, opcode:Opcode.CLOSE});
+            }
+
+            this.#sender.end(frame, resolve);
+            //wait for response close frame
+            this.#closeTimer = setTimeout(() => {
+                if(!this.#socket.writable){
+                    return;
+                }
+                //time out and force close socket
+                console.log("coerce to close socket");
+                this.#socket.end();
+            }, this.#closeTimeout);
+    
+            this.#state = State.CLOSING;
+        });
     }
 
-    async pong(options?:{payload?:Buffer, isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
-        if(this.#state !== State.OPEN){
-            throw new Error("state is not OPEN cannot send pong frame");
-        }
+    ping(options?:{payload?:Buffer, isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
+        return new Promise<void>((resolve, reject) => {
+            if(this.#state !== State.OPEN){
+                throw new Error("State is not OPEN cannot send ping frame");
+            }
 
-        await this.#sendFrame(Opcode.PONG, options);
+            const frame = createFrame({...options, opcode:Opcode.PING})
+            this.#sender.write(frame, (err) => err ? reject(err):resolve());
+        });
+    }
+
+    pong(options?:{payload?:Buffer, isMasked?:boolean, rsv?:[boolean, boolean, boolean]}){
+        return new Promise<void>((resolve, reject) => {
+            if(this.#state !== State.OPEN){
+                throw new Error("State is not OPEN cannot send pong frame");
+            }
+
+            const frame = createFrame({...options, opcode:Opcode.PONG})
+            this.#sender.write(frame, (err) => err ? reject(err):resolve());
+        });
     }
 }
 
