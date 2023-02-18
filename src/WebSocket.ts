@@ -38,12 +38,12 @@ export type WebSocketOptions = {
 }
 
 declare interface WebSocket {
+    on(event: "open", listener:() => void): this;
     on(event: "message", listener: (message: Buffer, type:Opcode.TEXT|Opcode.BINARY) => void): this;
-    on(event: "close", listener: (code?:number, reason?:string) => void): this;
-    on(event: "error", listener:(error:Error) => void): this;
     on(event: "pong", listener:(payload?:Buffer) => void): this;
     on(event: "ping", listener:(payload?:Buffer) => void): this;
-    on(event:"subprotocols", listener:(subprotocols:string[]) => void): this;
+    on(event: "error", listener:(error:Error) => void): this;
+    on(event: "close", listener: (code?:number, reason?:string) => void): this;
     on(event: string, listener: Function): this;
 }
 

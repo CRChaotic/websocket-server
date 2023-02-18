@@ -1,5 +1,3 @@
-import type { Socket } from "net";
-import type { IncomingMessage } from "http";
 import EventEmitter from "events";
 
 import { createServer, Server } from "https";
@@ -119,11 +117,6 @@ class WebSocketServer extends EventEmitter{
             });
             this.emit("connection", webSocket); 
         });
-    }
-
-    protected handleUpdrade(req:IncomingMessage, socket:Socket){
-
-        
     }
 
 }
