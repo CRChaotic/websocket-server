@@ -19,7 +19,7 @@ A simple websocket server
 ### Extends: [EventEmitter](https://nodejs.org/dist/latest-v19.x/docs/api/events.html#class-eventemitter)
 
 ### Event: `listening`
-The is listening is emitted when the websocket server started listening to connection
+The listening is emitted when the websocket server started listening to connection
 ### Event: `connection`
 The connection event is emitted once websocket opening handshake get started
 + websocket:[WebSocket](#classwebsocket)
